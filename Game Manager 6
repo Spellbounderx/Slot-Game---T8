@@ -19,6 +19,10 @@ public class GameManager : MonoBehaviour
     [SerializeField] private TMP_Text betText;
     [SerializeField] private TMP_Text lastWinText;
     [SerializeField] private TMP_InputField betInput;
+    [SerializeField] private Toggle autoSpinToggle; // NEW: Auto-spin toggle
+
+    [Header("Reset Option")]
+    [SerializeField] private Button resetButton;
 
     [Header("Bankroll Settings")]
     [SerializeField] private int startingBalance = 1000;
@@ -27,23 +31,31 @@ public class GameManager : MonoBehaviour
     [SerializeField] private float spinTime = 3.0f;
     [SerializeField] private int scrollLoops = 5;
 
-    [Header("Audio Clips (drag audio files here)")]
-    [SerializeField] private AudioClip startClip;         // when player presses spin
-    [SerializeField] private AudioClip spinClip;          // plays when spin starts
-    [SerializeField] private AudioClip stopClip;          // plays when reels stop
-    [SerializeField] private AudioClip jackpotClip;       // plays only on win
-    [SerializeField] private AudioClip outOfCreditsClip;  // plays when bet > balance
-    [SerializeField] private AudioClip bgmClip;           // background music
+    [Header("Audio Clips")]
+    [SerializeField] private AudioClip startClip;         
+    [SerializeField] private AudioClip spinClip;          
+    [SerializeField] private AudioClip stopClip;          
+    [SerializeField] private AudioClip jackpotClip;       
+    [SerializeField] private AudioClip outOfCreditsClip;  
+    [SerializeField] private AudioClip bgmClip;           
 
-    [Header("Audio Sources (assign or script will create them)")]
-    [SerializeField] private AudioSource sfxSource;       // single SFX source for start/spin/stop/outOfCredits
-    [SerializeField] private AudioSource jackpotSource;   // dedicated source for jackpot effect
-    [SerializeField] private AudioSource bgmSource;       // looping background music
+    [Header("Audio Sources")]
+    [SerializeField] private AudioSource sfxSource;       
+    [SerializeField] private AudioSource jackpotSource;   
+    [SerializeField] private AudioSource bgmSource;       
 
     [Header("Volume (0..1)")]
     [Range(0f, 1f)] [SerializeField] private float sfxVolume = 1f;
     [Range(0f, 1f)] [SerializeField] private float jackpotVolume = 1f;
     [Range(0f, 1f)] [SerializeField] private float bgmVolume = 0.25f;
+
+    [Header("Auto-Spin Settings")]
+    [SerializeField] private bool autoSpinEnabled = false;
+    [SerializeField] private float autoSpinDelay = 2f;
+
+    // PlayerPrefs keys
+    private const string BALANCE_KEY = "SlotBalance";
+    private const string LAST_BET_KEY = "SlotLastBet";
 
     // runtime state
     private int balance;
@@ -59,30 +71,41 @@ public class GameManager : MonoBehaviour
 
     void Awake()
     {
-        // Ensure button listener is single
+        // Button listeners
         if (spinButton != null)
         {
             spinButton.onClick.RemoveAllListeners();
             spinButton.onClick.AddListener(OnSpinButtonClicked);
         }
 
-        // Input field commit listener
+        if (resetButton != null)
+        {
+            resetButton.onClick.RemoveAllListeners();
+            resetButton.onClick.AddListener(ResetBalance);
+        }
+
+        // Input field listener
         if (betInput != null)
         {
             betInput.onEndEdit.RemoveAllListeners();
             betInput.onEndEdit.AddListener((s) => UpdateBetFromInput());
         }
 
-        // Ensure AudioSources exist — create if not assigned
+        // Auto-spin toggle listener
+        if (autoSpinToggle != null)
+        {
+            autoSpinToggle.onValueChanged.RemoveAllListeners();
+            autoSpinToggle.onValueChanged.AddListener((val) => SetAutoSpin(val));
+            autoSpinToggle.isOn = autoSpinEnabled;
+        }
+
         EnsureAudioSources();
 
-        // Setup and start BGM (do not play jackpot or other SFX here)
         if (bgmSource != null && bgmClip != null)
         {
             bgmSource.clip = bgmClip;
             bgmSource.loop = true;
             bgmSource.volume = bgmVolume;
-            bgmSource.playOnAwake = false;
             bgmSource.Play();
         }
     }
@@ -92,15 +115,13 @@ public class GameManager : MonoBehaviour
         _board = GameObject.Find("GameBoard");
         if (_board == null)
         {
-            Debug.LogError("GameBoard object not found! Make sure there is a GameObject named exactly 'GameBoard' with slot children.");
+            Debug.LogError("GameBoard object not found! Make sure there is a GameObject named 'GameBoard'.");
             return;
         }
 
-        // allocate arrays
         _gameBoard = new GameObject[boardHeight, boardWidth];
         _gridSlots = new Transform[boardHeight, boardWidth];
 
-        // cache slots
         bool missingSlot = false;
         for (int i = 0; i < boardHeight; i++)
         {
@@ -111,25 +132,25 @@ public class GameManager : MonoBehaviour
                 _gridSlots[i, j] = t;
                 if (t == null)
                 {
-                    Debug.LogError($"Slot {slotName} not found under GameBoard. Create child GameObjects named '0,0'..'2,2'.");
+                    Debug.LogError($"Slot {slotName} not found under GameBoard.");
                     missingSlot = true;
                 }
             }
         }
         if (missingSlot) return;
 
-        // initial values
-        balance = startingBalance;
+        balance = PlayerPrefs.GetInt(BALANCE_KEY, startingBalance);
+        betAmount = PlayerPrefs.GetInt(LAST_BET_KEY, 50);
         lastWin = 0;
 
-        // update UI and spawn initial board (no jackpot SFX here)
-        UpdateBetFromInput(); // reads betInput if present (does not clamp to balance here)
+        UpdateBetFromInput();
         UpdateUI();
         InitializeBoard();
         UpdateSpinButton();
+
+        if (autoSpinEnabled) StartCoroutine(AutoSpinRoutine());
     }
 
-    // Ensure audio sources exist so inspector assignment optional
     private void EnsureAudioSources()
     {
         if (sfxSource == null)
@@ -137,118 +158,85 @@ public class GameManager : MonoBehaviour
             GameObject sfxObj = new GameObject("SFX_Source");
             sfxObj.transform.SetParent(transform);
             sfxSource = sfxObj.AddComponent<AudioSource>();
-            sfxSource.playOnAwake = false;
-            sfxSource.loop = false;
         }
         if (jackpotSource == null)
         {
             GameObject jObj = new GameObject("Jackpot_Source");
             jObj.transform.SetParent(transform);
             jackpotSource = jObj.AddComponent<AudioSource>();
-            jackpotSource.playOnAwake = false;
-            jackpotSource.loop = false;
         }
         if (bgmSource == null)
         {
             GameObject bObj = new GameObject("BGM_Source");
             bObj.transform.SetParent(transform);
             bgmSource = bObj.AddComponent<AudioSource>();
-            bgmSource.playOnAwake = false;
             bgmSource.loop = true;
         }
 
-        // Set volumes from inspector values
         sfxSource.volume = sfxVolume;
         jackpotSource.volume = jackpotVolume;
         bgmSource.volume = bgmVolume;
     }
 
-    // Called when player clicks Spin
     private void OnSpinButtonClicked()
     {
         UpdateBetFromInput();
 
-        // block if already spinning
         if (isSpinning) return;
 
-        // If bet is greater than balance, reject and play out-of-credit
         if (betAmount > balance)
         {
-            if (outOfCreditsClip != null)
-                sfxSource.PlayOneShot(outOfCreditsClip, sfxVolume);
-            Debug.Log("Not enough credits to place that bet. Spin cancelled.");
+            if (outOfCreditsClip != null) sfxSource.PlayOneShot(outOfCreditsClip, sfxVolume);
             return;
         }
 
-        // Play start (click) sound
-        if (startClip != null)
-            sfxSource.PlayOneShot(startClip, sfxVolume);
+        if (startClip != null) sfxSource.PlayOneShot(startClip, sfxVolume);
 
-        // begin spin coroutine
         StartCoroutine(SpinRoutine());
     }
 
-    // Read bet input (does not clamp to balance; we validate before spin)
     private void UpdateBetFromInput()
     {
         if (betInput == null) return;
 
         int value;
         if (int.TryParse(betInput.text, out value))
-        {
             betAmount = Mathf.Max(1, value);
-        }
         else
-        {
-            // keep current betAmount if input invalid; set input text to it for clarity
             betInput.text = betAmount.ToString();
-        }
 
         if (betText != null) betText.text = "Bet: " + betAmount;
         UpdateSpinButton();
     }
 
-    // spawn initial symbols (no SFX)
     private void InitializeBoard()
     {
         for (int r = 0; r < boardHeight; r++)
             for (int c = 0; c < boardWidth; c++)
-                SpawnSymbol(r, c, immediate: true);
+                SpawnSymbol(r, c, true);
     }
 
-    // main spin coroutine
     private IEnumerator SpinRoutine()
     {
         isSpinning = true;
-
-        // Deduct bet (we already checked betAmount <= balance in OnSpinButtonClicked)
         balance -= betAmount;
         UpdateUI();
         UpdateSpinButton();
         ClearMatchLines();
 
-        // Play spin sound once at start (one-shot)
-        if (spinClip != null)
-            sfxSource.PlayOneShot(spinClip, sfxVolume);
+        if (spinClip != null) sfxSource.PlayOneShot(spinClip, sfxVolume);
 
-        // Replace symbols a few times to simulate spinning (no position shifting)
         for (int loop = 0; loop < scrollLoops; loop++)
         {
             for (int r = 0; r < boardHeight; r++)
-            {
                 for (int c = 0; c < boardWidth; c++)
-                {
                     SpawnSymbol(r, c);
-                }
-            }
+
             yield return new WaitForSeconds(spinTime / scrollLoops);
         }
 
-        // Play stop sound
-        if (stopClip != null)
-            sfxSource.PlayOneShot(stopClip, sfxVolume);
+        if (stopClip != null) sfxSource.PlayOneShot(stopClip, sfxVolume);
 
-        // Check for payout in center row
         int payout = CheckCenterRow();
         if (payout > 0)
         {
@@ -256,31 +244,29 @@ public class GameManager : MonoBehaviour
             lastWin = winAmount;
             balance += winAmount;
 
-            // Play jackpot independently and only now
-            if (jackpotClip != null)
-                jackpotSource.PlayOneShot(jackpotClip, jackpotVolume);
+            if (jackpotClip != null) jackpotSource.PlayOneShot(jackpotClip, jackpotVolume);
         }
 
         UpdateUI();
-
         isSpinning = false;
         UpdateSpinButton();
+
+        PlayerPrefs.SetInt(BALANCE_KEY, balance);
+        PlayerPrefs.SetInt(LAST_BET_KEY, betAmount);
+        PlayerPrefs.Save();
     }
 
-    // instantiate prefab at slot position
     private void SpawnSymbol(int row, int col, bool immediate = false)
     {
         if (_gridSlots == null || gamePieces == null || gamePieces.Length == 0) return;
         if (_gridSlots[row, col] == null) return;
 
-        // destroy previous
         if (_gameBoard[row, col] != null)
         {
             Destroy(_gameBoard[row, col]);
             _gameBoard[row, col] = null;
         }
 
-        // spawn random piece
         GameObject prefab = gamePieces[Random.Range(0, gamePieces.Length)];
         if (prefab == null) return;
 
@@ -290,12 +276,10 @@ public class GameManager : MonoBehaviour
         _gameBoard[row, col] = obj;
     }
 
-    // center row only (row index 1)
     private int CheckCenterRow()
     {
         int row = 1;
-        if (_gameBoard[row, 0] == null || _gameBoard[row, 1] == null || _gameBoard[row, 2] == null)
-            return 0;
+        if (_gameBoard[row, 0] == null || _gameBoard[row, 1] == null || _gameBoard[row, 2] == null) return 0;
 
         string a = _gameBoard[row, 0].name;
         string b = _gameBoard[row, 1].name;
@@ -345,29 +329,39 @@ public class GameManager : MonoBehaviour
             spinButton.interactable = (balance >= betAmount) && !isSpinning;
     }
 
-    // ===== Public volume controls (wire these to UI sliders if you want) =====
-    public void SetSfxVolume(float v)
+    private void ResetBalance()
     {
-        sfxVolume = Mathf.Clamp01(v);
-        if (sfxSource != null) sfxSource.volume = sfxVolume;
+        balance = startingBalance;
+        betAmount = 50;
+        lastWin = 0;
+
+        UpdateUI();
+        UpdateSpinButton();
+
+        PlayerPrefs.SetInt(BALANCE_KEY, balance);
+        PlayerPrefs.SetInt(LAST_BET_KEY, betAmount);
+        PlayerPrefs.Save();
     }
 
-    public void SetJackpotVolume(float v)
+    private IEnumerator AutoSpinRoutine()
     {
-        jackpotVolume = Mathf.Clamp01(v);
-        if (jackpotSource != null) jackpotSource.volume = jackpotVolume;
+        while (autoSpinEnabled)
+        {
+            yield return new WaitForSeconds(autoSpinDelay);
+            if (!isSpinning && balance >= betAmount)
+                OnSpinButtonClicked();
+        }
     }
 
-    public void SetBgmVolume(float v)
+    // Toggle listener
+    private void SetAutoSpin(bool val)
     {
-        bgmVolume = Mathf.Clamp01(v);
-        if (bgmSource != null) bgmSource.volume = bgmVolume;
+        autoSpinEnabled = val;
+        if (val) StartCoroutine(AutoSpinRoutine());
     }
 
-    // Optional: helper to directly play jackpot (safe public API)
-    public void PlayJackpot()
-    {
-        if (jackpotClip != null && jackpotSource != null)
-            jackpotSource.PlayOneShot(jackpotClip, jackpotVolume);
-    }
+    // Volume controls
+    public void SetSfxVolume(float v) { sfxVolume = Mathf.Clamp01(v); if (sfxSource != null) sfxSource.volume = sfxVolume; }
+    public void SetJackpotVolume(float v) { jackpotVolume = Mathf.Clamp01(v); if (jackpotSource != null) jackpotSource.volume = jackpotVolume; }
+    public void SetBgmVolume(float v) { bgmVolume = Mathf.Clamp01(v); if (bgmSource != null) bgmSource.volume = bgmVolume; }
 }
