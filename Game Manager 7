@@ -1,0 +1,367 @@
+using System.Collections;
+using System.Collections.Generic;
+using UnityEngine;
+using UnityEngine.UI;
+using TMPro;
+
+public class GameManager : MonoBehaviour
+{
+    [Header("Board Settings")]
+    [SerializeField] private int boardHeight = 3;
+    [SerializeField] private int boardWidth = 3;
+
+    [Header("Slot Icons")]
+    [SerializeField] private GameObject[] gamePieces; // prefabs with SymbolPrefab
+
+    [Header("UI Elements")]
+    [SerializeField] private Button spinButton;
+    [SerializeField] private TMP_Text balanceText;
+    [SerializeField] private TMP_Text betText;
+    [SerializeField] private TMP_Text lastWinText;
+    [SerializeField] private TMP_InputField betInput;
+    [SerializeField] private Toggle autoSpinToggle; // NEW: Auto-spin toggle
+
+    [Header("Reset Option")]
+    [SerializeField] private Button resetButton;
+
+    [Header("Bankroll Settings")]
+    [SerializeField] private int startingBalance = 1000;
+
+    [Header("Animation Settings")]
+    [SerializeField] private float spinTime = 3.0f;
+    [SerializeField] private int scrollLoops = 5;
+
+    [Header("Audio Clips")]
+    [SerializeField] private AudioClip startClip;         
+    [SerializeField] private AudioClip spinClip;          
+    [SerializeField] private AudioClip stopClip;          
+    [SerializeField] private AudioClip jackpotClip;       
+    [SerializeField] private AudioClip outOfCreditsClip;  
+    [SerializeField] private AudioClip bgmClip;           
+
+    [Header("Audio Sources")]
+    [SerializeField] private AudioSource sfxSource;       
+    [SerializeField] private AudioSource jackpotSource;   
+    [SerializeField] private AudioSource bgmSource;       
+
+    [Header("Volume (0..1)")]
+    [Range(0f, 1f)] [SerializeField] private float sfxVolume = 1f;
+    [Range(0f, 1f)] [SerializeField] private float jackpotVolume = 1f;
+    [Range(0f, 1f)] [SerializeField] private float bgmVolume = 0.25f;
+
+    [Header("Auto-Spin Settings")]
+    [SerializeField] private bool autoSpinEnabled = false;
+    [SerializeField] private float autoSpinDelay = 2f;
+
+    // PlayerPrefs keys
+    private const string BALANCE_KEY = "SlotBalance";
+    private const string LAST_BET_KEY = "SlotLastBet";
+
+    // runtime state
+    private int balance;
+    private int betAmount = 50;
+    private int lastWin;
+    private bool isSpinning = false;
+
+    private GameObject _board;
+    private GameObject[,] _gameBoard;
+    private Transform[,] _gridSlots;
+    private Vector3 _offset = new Vector3(0, 0, -1);
+    private List<GameObject> _matchLines = new List<GameObject>();
+
+    void Awake()
+    {
+        // Button listeners
+        if (spinButton != null)
+        {
+            spinButton.onClick.RemoveAllListeners();
+            spinButton.onClick.AddListener(OnSpinButtonClicked);
+        }
+
+        if (resetButton != null)
+        {
+            resetButton.onClick.RemoveAllListeners();
+            resetButton.onClick.AddListener(ResetBalance);
+        }
+
+        // Input field listener
+        if (betInput != null)
+        {
+            betInput.onEndEdit.RemoveAllListeners();
+            betInput.onEndEdit.AddListener((s) => UpdateBetFromInput());
+        }
+
+        // Auto-spin toggle listener
+        if (autoSpinToggle != null)
+        {
+            autoSpinToggle.onValueChanged.RemoveAllListeners();
+            autoSpinToggle.onValueChanged.AddListener((val) => SetAutoSpin(val));
+            autoSpinToggle.isOn = autoSpinEnabled;
+        }
+
+        EnsureAudioSources();
+
+        if (bgmSource != null && bgmClip != null)
+        {
+            bgmSource.clip = bgmClip;
+            bgmSource.loop = true;
+            bgmSource.volume = bgmVolume;
+            bgmSource.Play();
+        }
+    }
+
+    void Start()
+    {
+        _board = GameObject.Find("GameBoard");
+        if (_board == null)
+        {
+            Debug.LogError("GameBoard object not found! Make sure there is a GameObject named 'GameBoard'.");
+            return;
+        }
+
+        _gameBoard = new GameObject[boardHeight, boardWidth];
+        _gridSlots = new Transform[boardHeight, boardWidth];
+
+        bool missingSlot = false;
+        for (int i = 0; i < boardHeight; i++)
+        {
+            for (int j = 0; j < boardWidth; j++)
+            {
+                string slotName = $"{i},{j}";
+                Transform t = _board.transform.Find(slotName);
+                _gridSlots[i, j] = t;
+                if (t == null)
+                {
+                    Debug.LogError($"Slot {slotName} not found under GameBoard.");
+                    missingSlot = true;
+                }
+            }
+        }
+        if (missingSlot) return;
+
+        balance = PlayerPrefs.GetInt(BALANCE_KEY, startingBalance);
+        betAmount = PlayerPrefs.GetInt(LAST_BET_KEY, 50);
+        lastWin = 0;
+
+        UpdateBetFromInput();
+        UpdateUI();
+        InitializeBoard();
+        UpdateSpinButton();
+
+        if (autoSpinEnabled) StartCoroutine(AutoSpinRoutine());
+    }
+
+    private void EnsureAudioSources()
+    {
+        if (sfxSource == null)
+        {
+            GameObject sfxObj = new GameObject("SFX_Source");
+            sfxObj.transform.SetParent(transform);
+            sfxSource = sfxObj.AddComponent<AudioSource>();
+        }
+        if (jackpotSource == null)
+        {
+            GameObject jObj = new GameObject("Jackpot_Source");
+            jObj.transform.SetParent(transform);
+            jackpotSource = jObj.AddComponent<AudioSource>();
+        }
+        if (bgmSource == null)
+        {
+            GameObject bObj = new GameObject("BGM_Source");
+            bObj.transform.SetParent(transform);
+            bgmSource = bObj.AddComponent<AudioSource>();
+            bgmSource.loop = true;
+        }
+
+        sfxSource.volume = sfxVolume;
+        jackpotSource.volume = jackpotVolume;
+        bgmSource.volume = bgmVolume;
+    }
+
+    private void OnSpinButtonClicked()
+    {
+        UpdateBetFromInput();
+
+        if (isSpinning) return;
+
+        if (betAmount > balance)
+        {
+            if (outOfCreditsClip != null) sfxSource.PlayOneShot(outOfCreditsClip, sfxVolume);
+            return;
+        }
+
+        if (startClip != null) sfxSource.PlayOneShot(startClip, sfxVolume);
+
+        StartCoroutine(SpinRoutine());
+    }
+
+    private void UpdateBetFromInput()
+    {
+        if (betInput == null) return;
+
+        int value;
+        if (int.TryParse(betInput.text, out value))
+            betAmount = Mathf.Max(1, value);
+        else
+            betInput.text = betAmount.ToString();
+
+        if (betText != null) betText.text = "Bet: " + betAmount;
+        UpdateSpinButton();
+    }
+
+    private void InitializeBoard()
+    {
+        for (int r = 0; r < boardHeight; r++)
+            for (int c = 0; c < boardWidth; c++)
+                SpawnSymbol(r, c, true);
+    }
+
+    private IEnumerator SpinRoutine()
+    {
+        isSpinning = true;
+        balance -= betAmount;
+        UpdateUI();
+        UpdateSpinButton();
+        ClearMatchLines();
+
+        if (spinClip != null) sfxSource.PlayOneShot(spinClip, sfxVolume);
+
+        for (int loop = 0; loop < scrollLoops; loop++)
+        {
+            for (int r = 0; r < boardHeight; r++)
+                for (int c = 0; c < boardWidth; c++)
+                    SpawnSymbol(r, c);
+
+            yield return new WaitForSeconds(spinTime / scrollLoops);
+        }
+
+        if (stopClip != null) sfxSource.PlayOneShot(stopClip, sfxVolume);
+
+        int payout = CheckCenterRow();
+        if (payout > 0)
+        {
+            int winAmount = payout * betAmount;
+            lastWin = winAmount;
+            balance += winAmount;
+
+            if (jackpotClip != null) jackpotSource.PlayOneShot(jackpotClip, jackpotVolume);
+        }
+
+        UpdateUI();
+        isSpinning = false;
+        UpdateSpinButton();
+
+        PlayerPrefs.SetInt(BALANCE_KEY, balance);
+        PlayerPrefs.SetInt(LAST_BET_KEY, betAmount);
+        PlayerPrefs.Save();
+    }
+
+    private void SpawnSymbol(int row, int col, bool immediate = false)
+    {
+        if (_gridSlots == null || gamePieces == null || gamePieces.Length == 0) return;
+        if (_gridSlots[row, col] == null) return;
+
+        if (_gameBoard[row, col] != null)
+        {
+            Destroy(_gameBoard[row, col]);
+            _gameBoard[row, col] = null;
+        }
+
+        GameObject prefab = gamePieces[Random.Range(0, gamePieces.Length)];
+        if (prefab == null) return;
+
+        Vector3 pos = _gridSlots[row, col].position + _offset;
+        GameObject obj = Instantiate(prefab, pos, Quaternion.identity, _gridSlots[row, col]);
+        obj.name = prefab.name;
+        _gameBoard[row, col] = obj;
+    }
+
+    private int CheckCenterRow()
+    {
+        int row = 1;
+        if (_gameBoard[row, 0] == null || _gameBoard[row, 1] == null || _gameBoard[row, 2] == null) return 0;
+
+        string a = _gameBoard[row, 0].name;
+        string b = _gameBoard[row, 1].name;
+        string c = _gameBoard[row, 2].name;
+
+        if (a == b && b == c)
+        {
+            DrawLine(_gameBoard[row, 0].transform.position + _offset,
+                     _gameBoard[row, 2].transform.position + _offset);
+
+            SymbolPrefab sp = _gameBoard[row, 0].GetComponent<SymbolPrefab>();
+            return sp != null && sp.symbolData != null ? sp.symbolData.payout : 2;
+        }
+        return 0;
+    }
+
+    private void DrawLine(Vector3 start, Vector3 end)
+    {
+        GameObject line = new GameObject("WinLine");
+        LineRenderer lr = line.AddComponent<LineRenderer>();
+        lr.positionCount = 2;
+        lr.SetPosition(0, start);
+        lr.SetPosition(1, end);
+        lr.startWidth = lr.endWidth = 0.1f;
+        lr.material = new Material(Shader.Find("Sprites/Default"));
+        lr.startColor = lr.endColor = Color.yellow;
+        _matchLines.Add(line);
+    }
+
+    private void ClearMatchLines()
+    {
+        foreach (var l in _matchLines)
+            if (l != null) Destroy(l);
+        _matchLines.Clear();
+    }
+
+    private void UpdateUI()
+    {
+        if (balanceText != null) balanceText.text = "Balance: " + balance;
+        if (betText != null) betText.text = "Bet: " + betAmount;
+        if (lastWinText != null) lastWinText.text = "Last Win: " + lastWin;
+    }
+
+    private void UpdateSpinButton()
+    {
+        if (spinButton != null)
+            spinButton.interactable = (balance >= betAmount) && !isSpinning;
+    }
+
+    private void ResetBalance()
+    {
+        balance = startingBalance;
+        betAmount = 50;
+        lastWin = 0;
+
+        UpdateUI();
+        UpdateSpinButton();
+
+        PlayerPrefs.SetInt(BALANCE_KEY, balance);
+        PlayerPrefs.SetInt(LAST_BET_KEY, betAmount);
+        PlayerPrefs.Save();
+    }
+
+    private IEnumerator AutoSpinRoutine()
+    {
+        while (autoSpinEnabled)
+        {
+            yield return new WaitForSeconds(autoSpinDelay);
+            if (!isSpinning && balance >= betAmount)
+                OnSpinButtonClicked();
+        }
+    }
+
+    // Toggle listener
+    private void SetAutoSpin(bool val)
+    {
+        autoSpinEnabled = val;
+        if (val) StartCoroutine(AutoSpinRoutine());
+    }
+
+    // Volume controls
+    public void SetSfxVolume(float v) { sfxVolume = Mathf.Clamp01(v); if (sfxSource != null) sfxSource.volume = sfxVolume; }
+    public void SetJackpotVolume(float v) { jackpotVolume = Mathf.Clamp01(v); if (jackpotSource != null) jackpotSource.volume = jackpotVolume; }
+    public void SetBgmVolume(float v) { bgmVolume = Mathf.Clamp01(v); if (bgmSource != null) bgmSource.volume = bgmVolume; }
+}
