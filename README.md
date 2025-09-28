@@ -123,3 +123,28 @@ features such as Auto-Spin and Jackpot detection.
 
 •	Skins & themes for symbols and backgrounds.
 
+👾 Third-Party Assets and Credits:
+
+- Background music and audio from:
+
+        YouTube Video: https://www.youtube.com/watch?v=Xa2tDZxnm6w
+        YouTube Video / Playlist: https://www.youtube.com/watch?v=-lbbHQbZNKg&list=RD-lbbHQbZNKg&start_radio=1
+  
+- Icons from Unity Asset Store: Fantasy Status Icons
+
+        URL: https://assetstore.unity.com/packages/2d/gui/icons/fantasy-status-icons-265728
+
+🤖 Known Issues:
+
+- Jackpot may feel rare depending on symbol probability weights; requires careful balancing of SymbolData values.
+
+- Only the center row is currently checked for wins; additional paylines are not yet supported.
+
+- If symbols are not correctly assigned to prefabs or missing in the inspector, spins may fail to display results.
+
+- Persistence relies on PlayerPrefs, which can be cleared manually outside the game and is not secure for production use.
+
+- UI scaling may need adjustment on different resolutions and aspect ratios.
+
+- No complex animations beyond symbol respawning.
+
