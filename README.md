@@ -2,7 +2,7 @@
 A simple 3x3 slot machine game built with Unity. 
 This project demonstrates Unity fundamentals like UI handling, game logic, audio, persistence (PlayerPrefs), and optional 
 features such as Auto-Spin and Jackpot detection.
-________________________________________
+
 📌 Features
 •	Spinning Reels – Random symbols appear on a 3x3 grid.
 •	Balance & Bets – Players can place bets, win payouts, and manage balance.
@@ -11,7 +11,7 @@ ________________________________________
 •	Jackpot Detection – Rewards players when all rows match jackpot symbols.
 •	Persistence – Balance, last bet, and audio toggle are saved across sessions using PlayerPrefs.
 •	Reset Option – Reset stored balance and settings when needed.
-________________________________________
+
 🏗️ Architecture
 •	GameManager (MonoBehaviour)
   o	Controls spins, checks wins/jackpots, updates balance.
@@ -34,7 +34,7 @@ ________________________________________
 •	Persistence Layer (PlayerPrefs)
   o	Stores: Balance, Last Bet, Auto-Spin state, SFX toggle.
   o	Reset option clears saved values.
-________________________________________
+
 🛠️ How to Set Up
 1.	Clone this repository:
 2.	git clone https://github.com/your-username/unity-slot-machine.git
@@ -52,8 +52,8 @@ ________________________________________
   o	Assign in GameManager’s symbols array.
 6.	Add Audio Sources to GameManager:
   o	Drag in clips for Spin, Win, Jackpot, Out-of-Credits, BGM.
-7.	Test in Play Mode 🎮
-________________________________________
+7.	Test in Play Mode
+
 🎮 Controls
 •	Spin: Spins reels once.
 •	Auto-Spin: Continuously spins until toggled off.
@@ -61,7 +61,7 @@ ________________________________________
 •	Balance Display: Shows remaining credits.
 •	Reset Button: Resets saved balance and settings.
 •	SFX Toggle: Turns game sounds on/off.
-________________________________________
+
 🚀 Future Improvements
 •	Add more animation in the reel and overall game.
 •	More complex jackpot patterns (diagonals, bonus rounds).
